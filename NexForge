@@ -1,0 +1,77 @@
+import os
+import sys
+import json
+import subprocess
+import argparse
+from pathlib import Path
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+
+
+APP_NAME = "NexForge"
+VERSION = "1.0.0"
+
+
+TEMPLATES = {
+    "python": {
+        "folders": ["src", "tests", "docs"],
+        "files": ["src/main.py", "tests/test_main.py"]
+    },
+    "typescript": {
+        "folders": ["src", "tests", "docs"],
+        "files": ["src/index.ts", "tests/index.test.ts"]
+    },
+    "rust": {
+        "folders": ["src", "tests", "docs"],
+        "files": ["src/main.rs"]
+    },
+    "go": {
+        "folders": ["cmd", "internal", "tests", "docs"],
+        "files": ["main.go"]
+    }
+}
+
+
+def log(message):
+    print(f"[{APP_NAME}] {message}")
+
+
+def run(command, cwd=None):
+    try:
+        subprocess.run(
+            command,
+            cwd=cwd,
+            shell=True,
+            check=True
+        )
+    except subprocess.CalledProcessError:
+        log(f"Command failed: {command}")
+        sys.exit(1)
+
+
+def create_file(path, content=""):
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not path.exists():
+        path.write_text(content, encoding="utf-8")
+
+
+def create_readme(name, language):
+    return f"""# {name}
+
+> A project generated with {APP_NAME}.
+
+## Overview
+
+{name} is built with {language} and managed using NexForge.
+
+## Project Structure
+
+```text
+{name}/
+├── src/
+├── tests/
+├── docs/
+├── README.md
+├── LICENSE
+└── .gitignore
