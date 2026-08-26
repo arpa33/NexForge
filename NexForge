@@ -75,3 +75,281 @@ def create_readme(name, language):
 ├── README.md
 ├── LICENSE
 └── .gitignore
+with open(os.path.join(name, ".gitignore"), "w", encoding="utf-8") as file:
+    file.write(gitignore)
+
+os.chdir(name)
+
+run_command("git init")
+run_command("git add .")
+run_command('git commit -m "Initial project setup"')
+
+print(f"\nRepository '{name}' created successfully!")
+print("Next step: connect it to GitHub and push your code.")
+parser.add_argument(
+    "name",
+    help="Name of the repository"
+)
+
+parser.add_argument(
+    "--language",
+    default="Python",
+    help="Programming language"
+)
+
+args = parser.parse_args()
+
+create_repository(args.name, args.language)
+
+اجرا:
+
+```bash
+python repoforge.py MyAwesomeProject --language Python
+import os
+import sys
+import json
+import subprocess
+import argparse
+from pathlib import Path
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+
+
+APP_NAME = "NexForge"
+VERSION = "1.0.0"
+
+
+TEMPLATES = {
+    "python": {
+        "folders": ["src", "tests", "docs"],
+        "files": ["src/main.py", "tests/test_main.py"]
+    },
+    "typescript": {
+        "folders": ["src", "tests", "docs"],
+        "files": ["src/index.ts", "tests/index.test.ts"]
+    },
+    "rust": {
+        "folders": ["src", "tests", "docs"],
+        "files": ["src/main.rs"]
+    },
+    "go": {
+        "folders": ["cmd", "internal", "tests", "docs"],
+        "files": ["main.go"]
+    }
+}
+
+
+def log(message):
+    print(f"[{APP_NAME}] {message}")
+
+
+def run(command, cwd=None):
+    try:
+        subprocess.run(
+            command,
+            cwd=cwd,
+            shell=True,
+            check=True
+        )
+    except subprocess.CalledProcessError:
+        log(f"Command failed: {command}")
+        sys.exit(1)
+
+
+def create_file(path, content=""):
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not path.exists():
+        path.write_text(content, encoding="utf-8")
+
+
+def create_readme(name, language):
+    return f"""# {name}
+
+> A project generated with {APP_NAME}.
+
+## Overview
+
+{name} is built with {language} and managed using NexForge.
+
+## Project Structure
+
+```text
+{name}/
+├── src/
+├── tests/
+├── docs/
+├── README.md
+├── LICENSE
+└── .gitignore
+git clone <repository-url>
+cd {name}
+ignores = {
+    "python": """
+return common + ignores.get(language, "")
+if language not in TEMPLATES:
+    log(f"Unsupported language: {language}")
+    log(f"Available: {', '.join(TEMPLATES.keys())}")
+    sys.exit(1)
+
+root = Path(name)
+
+if root.exists():
+    log("Project directory already exists.")
+    sys.exit(1)
+
+root.mkdir()
+
+template = TEMPLATES[language]
+
+for folder in template["folders"]:
+    (root / folder).mkdir(parents=True, exist_ok=True)
+
+for file in template["files"]:
+    create_file(root / file)
+
+create_file(
+    root / "README.md",
+    create_readme(name, language)
+)
+
+create_file(
+    root / ".gitignore",
+    create_gitignore(language)
+)
+
+create_file(
+    root / "LICENSE",
+    create_license()
+)
+
+config = {
+    "name": name,
+    "language": language,
+    "generated_by": APP_NAME,
+    "version": VERSION
+}
+
+create_file(
+    root / ".nexforge.json",
+    json.dumps(config, indent=2)
+)
+
+log("Project structure created.")
+run("git init", cwd=name)
+run("git add .", cwd=name)
+run(
+    'git commit -m "chore: initialize project"',
+    cwd=name
+)
+
+log("Git repository initialized.")
+payload = json.dumps({
+    "name": name,
+    "private": private,
+    "description": f"Project generated with {APP_NAME}"
+}).encode()
+
+request = Request(
+    "https://api.github.com/user/repos",
+    data=payload,
+    headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json"
+    },
+    method="POST"
+)
+
+try:
+    with urlopen(request) as response:
+        data = json.loads(response.read())
+
+    log(f"GitHub repository created: {data['html_url']}")
+
+    return data["clone_url"]
+
+except HTTPError as error:
+    log(f"GitHub API error: {error.code}")
+    sys.exit(1)
+run(
+    f"git remote add origin {remote_url}",
+    cwd=name
+)
+
+run(
+    "git branch -M main",
+    cwd=name
+)
+
+run(
+    "git push -u origin main",
+    cwd=name
+)
+
+log("Project successfully pushed to GitHub.")
+parser.add_argument(
+    "name",
+    help="Project name"
+)
+
+parser.add_argument(
+    "-l",
+    "--language",
+    default="python",
+    choices=TEMPLATES.keys(),
+    help="Project language"
+)
+
+parser.add_argument(
+    "--github-token",
+    help="GitHub Personal Access Token"
+)
+
+parser.add_argument(
+    "--private",
+    action="store_true",
+    help="Create a private GitHub repository"
+)
+
+args = parser.parse_args()
+
+log(f"{APP_NAME} v{VERSION}")
+log(f"Creating {args.language} project: {args.name}")
+
+create_project(
+    args.name,
+    args.language
+)
+
+initialize_git(args.name)
+
+if args.github_token:
+    remote = create_github_repository(
+        args.name,
+        args.github_token,
+        args.private
+    )
+
+    push_to_github(
+        args.name,
+        remote
+    )
+
+log("Done. Your project is ready.")
+
+نمونه استفاده:
+
+```bash
+python nexforge.py QuantumVault --language python
+python nexforge.py QuantumVault \
+  --language typescript \
+  --github-token YOUR_GITHUB_TOKEN
+QuantumVault/
+├── src/
+├── tests/
+├── docs/
+├── README.md
+├── LICENSE
+├── .gitignore
+└── .nexforge.json
