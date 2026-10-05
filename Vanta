@@ -1,0 +1,896 @@
+Vanta/
+├── src/
+│   ├── cli.ts
+│   ├── index.ts
+│   ├── analyzer/
+│   │   ├── repository.ts
+│   │   ├── structure.ts
+│   │   ├── git.ts
+│   │   ├── dependencies.ts
+│   │   └── metrics.ts
+│   ├── commands/
+│   │   └── analyze.ts
+│   ├── core/
+│   │   ├── scanner.ts
+│   │   ├── reporter.ts
+│   │   └── types.ts
+│   └── utils/
+│       ├── filesystem.ts
+│       └── terminal.ts
+├── tests/
+│   └── scanner.test.ts
+├── .gitignore
+├── package.json
+├── tsconfig.json
+├── README.md
+└── LICENSE
+
+
+// ============================================================
+// package.json
+// ============================================================
+
+{
+  "name": "vanta",
+  "version": "1.0.0",
+  "description": "A high-performance repository intelligence CLI for analyzing codebases, Git metadata, dependencies and project health.",
+  "type": "module",
+  "bin": {
+    "vanta": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "repository",
+    "github",
+    "developer-tools",
+    "cli",
+    "typescript",
+    "code-analysis",
+    "git",
+    "codebase"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "commander": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
+
+
+// ============================================================
+// tsconfig.json
+// ============================================================
+
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "dist",
+    "strict": true,
+    "noImplicitAny": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/**/*.ts"
+  ]
+}
+
+
+// ============================================================
+// .gitignore
+// ============================================================
+
+node_modules/
+dist/
+.env
+.env.*
+coverage/
+.DS_Store
+*.log
+
+
+// ============================================================
+// src/core/types.ts
+// ============================================================
+
+export interface RepositoryStats {
+  path: string;
+  name: string;
+  files: number;
+  directories: number;
+  lines: number;
+  sizeBytes: number;
+}
+
+export interface GitStats {
+  branch: string;
+  commits: number;
+  contributors: number;
+  clean: boolean;
+  remote?: string;
+}
+
+export interface DependencyStats {
+  runtime: number;
+  development: number;
+  packageManager: string;
+}
+
+export interface ProjectMetrics {
+  languages: Record<string, number>;
+  largestFiles: Array<{
+    path: string;
+    sizeBytes: number;
+  }>;
+  riskFlags: string[];
+}
+
+export interface RepositoryReport {
+  repository: RepositoryStats;
+  git: GitStats | null;
+  dependencies: DependencyStats | null;
+  metrics: ProjectMetrics;
+  generatedAt: string;
+}
+
+
+// ============================================================
+// src/utils/filesystem.ts
+// ============================================================
+
+import fs from "node:fs/promises";
+import path from "node:path";
+
+const IGNORED_DIRECTORIES = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+  ".next",
+  ".turbo",
+  ".cache"
+]);
+
+export async function walkDirectory(
+  root: string
+): Promise<string[]> {
+  const results: string[] = [];
+
+  async function walk(current: string): Promise<void> {
+    const entries = await fs.readdir(current, {
+      withFileTypes: true
+    });
+
+    for (const entry of entries) {
+      if (
+        entry.isDirectory() &&
+        IGNORED_DIRECTORIES.has(entry.name)
+      ) {
+        continue;
+      }
+
+      const fullPath = path.join(current, entry.name);
+
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else if (entry.isFile()) {
+        results.push(fullPath);
+      }
+    }
+  }
+
+  await walk(root);
+
+  return results;
+}
+
+export function extensionOf(file: string): string {
+  const ext = path.extname(file).toLowerCase();
+
+  return ext || "[no extension]";
+}
+
+
+// ============================================================
+// src/utils/terminal.ts
+// ============================================================
+
+export function success(message: string): void {
+  console.log(`✓ ${message}`);
+}
+
+export function info(message: string): void {
+  console.log(`• ${message}`);
+}
+
+export function warning(message: string): void {
+  console.log(`⚠ ${message}`);
+}
+
+export function error(message: string): void {
+  console.error(`✕ ${message}`);
+}
+
+
+// ============================================================
+// src/analyzer/structure.ts
+// ============================================================
+
+import fs from "node:fs/promises";
+import path from "node:path";
+import {
+  walkDirectory,
+  extensionOf
+} from "../utils/filesystem.js";
+import type {
+  RepositoryStats,
+  ProjectMetrics
+} from "../core/types.js";
+
+export async function analyzeStructure(
+  repositoryPath: string
+): Promise<{
+  stats: RepositoryStats;
+  metrics: ProjectMetrics;
+}> {
+  const files = await walkDirectory(repositoryPath);
+
+  let directories = 0;
+  let lines = 0;
+  let sizeBytes = 0;
+
+  const languages: Record<string, number> = {};
+  const largestFiles: ProjectMetrics["largestFiles"] = [];
+
+  for (const file of files) {
+    const stat = await fs.stat(file);
+
+    sizeBytes += stat.size;
+
+    const extension = extensionOf(file);
+
+    languages[extension] =
+      (languages[extension] ?? 0) + 1;
+
+    largestFiles.push({
+      path: path.relative(repositoryPath, file),
+      sizeBytes: stat.size
+    });
+
+    if (isTextFile(extension)) {
+      try {
+        const content = await fs.readFile(file, "utf8");
+        lines += content.split(/\r?\n/).length;
+      } catch {
+        // Ignore unreadable files.
+      }
+    }
+  }
+
+  const directoriesSet = new Set(
+    files.map((file) =>
+      path.dirname(path.relative(repositoryPath, file))
+    )
+  );
+
+  directories = directoriesSet.size;
+
+  largestFiles.sort(
+    (a, b) => b.sizeBytes - a.sizeBytes
+  );
+
+  const riskFlags: string[] = [];
+
+  if (files.length === 0) {
+    riskFlags.push("Repository contains no files");
+  }
+
+  if (sizeBytes > 500_000_000) {
+    riskFlags.push("Repository exceeds 500MB");
+  }
+
+  if (files.some((file) =>
+    file.toLowerCase().includes(".env")
+  )) {
+    riskFlags.push("Environment files detected");
+  }
+
+  return {
+    stats: {
+      path: repositoryPath,
+      name: path.basename(repositoryPath),
+      files: files.length,
+      directories,
+      lines,
+      sizeBytes
+    },
+    metrics: {
+      languages,
+      largestFiles: largestFiles.slice(0, 10),
+      riskFlags
+    }
+  };
+}
+
+function isTextFile(extension: string): boolean {
+  return [
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".json",
+    ".md",
+    ".txt",
+    ".css",
+    ".scss",
+    ".html",
+    ".yml",
+    ".yaml",
+    ".xml",
+    ".py",
+    ".go",
+    ".rs",
+    ".java",
+    ".kt",
+    ".c",
+    ".cpp",
+    ".h"
+  ].includes(extension);
+}
+
+
+// ============================================================
+// src/analyzer/git.ts
+// ============================================================
+
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+import type { GitStats } from "../core/types.js";
+
+const exec = promisify(execFile);
+
+async function git(
+  repositoryPath: string,
+  args: string[]
+): Promise<string> {
+  const result = await exec(
+    "git",
+    ["-C", repositoryPath, ...args]
+  );
+
+  return result.stdout.trim();
+}
+
+export async function analyzeGit(
+  repositoryPath: string
+): Promise<GitStats | null> {
+  try {
+    await git(repositoryPath, ["rev-parse", "--is-inside-work-tree"]);
+
+    const branch = await git(
+      repositoryPath,
+      ["branch", "--show-current"]
+    );
+
+    const commitOutput = await git(
+      repositoryPath,
+      ["rev-list", "--count", "HEAD"]
+    );
+
+    const contributorOutput = await git(
+      repositoryPath,
+      ["shortlog", "-sne", "HEAD"]
+    );
+
+    const status = await git(
+      repositoryPath,
+      ["status", "--porcelain"]
+    );
+
+    let remote: string | undefined;
+
+    try {
+      remote = await git(
+        repositoryPath,
+        ["remote", "get-url", "origin"]
+      );
+    } catch {
+      remote = undefined;
+    }
+
+    return {
+      branch: branch || "detached",
+      commits: Number(commitOutput) || 0,
+      contributors: contributorOutput
+        ? contributorOutput.split("\n").length
+        : 0,
+      clean: status.length === 0,
+      remote
+    };
+  } catch {
+    return null;
+  }
+}
+
+
+// ============================================================
+// src/analyzer/dependencies.ts
+// ============================================================
+
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import type { DependencyStats } from "../core/types.js";
+
+export async function analyzeDependencies(
+  repositoryPath: string
+): Promise<DependencyStats | null> {
+  const packageJsonPath = path.join(
+    repositoryPath,
+    "package.json"
+  );
+
+  try {
+    const raw = await fs.readFile(
+      packageJsonPath,
+      "utf8"
+    );
+
+    const pkg = JSON.parse(raw);
+
+    return {
+      runtime: Object.keys(
+        pkg.dependencies ?? {}
+      ).length,
+
+      development: Object.keys(
+        pkg.devDependencies ?? {}
+      ).length,
+
+      packageManager:
+        pkg.packageManager ??
+        detectPackageManager(repositoryPath)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function detectPackageManager(
+  repositoryPath: string
+): string {
+  return "npm";
+}
+
+
+// ============================================================
+// src/analyzer/repository.ts
+// ============================================================
+
+import {
+  analyzeStructure
+} from "./structure.js";
+
+import {
+  analyzeGit
+} from "./git.js";
+
+import {
+  analyzeDependencies
+} from "./dependencies.js";
+
+import type {
+  RepositoryReport
+} from "../core/types.js";
+
+export async function analyzeRepository(
+  repositoryPath: string
+): Promise<RepositoryReport> {
+  const [
+    structure,
+    git,
+    dependencies
+  ] = await Promise.all([
+    analyzeStructure(repositoryPath),
+    analyzeGit(repositoryPath),
+    analyzeDependencies(repositoryPath)
+  ]);
+
+  return {
+    repository: structure.stats,
+    git,
+    dependencies,
+    metrics: structure.metrics,
+    generatedAt: new Date().toISOString()
+  };
+}
+
+
+// ============================================================
+// src/core/scanner.ts
+// ============================================================
+
+import path from "node:path";
+
+import {
+  analyzeRepository
+} from "../analyzer/repository.js";
+
+import type {
+  RepositoryReport
+} from "./types.js";
+
+export async function scan(
+  repositoryPath = "."
+): Promise<RepositoryReport> {
+  const resolvedPath = path.resolve(
+    repositoryPath
+  );
+
+  return analyzeRepository(resolvedPath);
+}
+
+
+// ============================================================
+// src/core/reporter.ts
+// ============================================================
+
+import type {
+  RepositoryReport
+} from "./types.js";
+
+export function renderReport(
+  report: RepositoryReport
+): void {
+  const divider =
+    "─".repeat(64);
+
+  console.log("\n");
+  console.log("VANTA REPOSITORY REPORT");
+  console.log(divider);
+
+  console.log(
+    `Repository : ${report.repository.name}`
+  );
+
+  console.log(
+    `Path       : ${report.repository.path}`
+  );
+
+  console.log(
+    `Files      : ${report.repository.files}`
+  );
+
+  console.log(
+    `Directories: ${report.repository.directories}`
+  );
+
+  console.log(
+    `Lines      : ${report.repository.lines}`
+  );
+
+  console.log(
+    `Size       : ${formatBytes(
+      report.repository.sizeBytes
+    )}`
+  );
+
+  console.log(divider);
+
+  if (report.git) {
+    console.log("GIT");
+
+    console.log(
+      `Branch     : ${report.git.branch}`
+    );
+
+    console.log(
+      `Commits    : ${report.git.commits}`
+    );
+
+    console.log(
+      `Contributors: ${report.git.contributors}`
+    );
+
+    console.log(
+      `Working tree: ${
+        report.git.clean
+          ? "clean"
+          : "modified"
+      }`
+    );
+
+    if (report.git.remote) {
+      console.log(
+        `Remote     : ${report.git.remote}`
+      );
+    }
+  } else {
+    console.log("GIT");
+    console.log("Not a Git repository");
+  }
+
+  console.log(divider);
+
+  if (report.dependencies) {
+    console.log("DEPENDENCIES");
+
+    console.log(
+      `Runtime    : ${report.dependencies.runtime}`
+    );
+
+    console.log(
+      `Development: ${report.dependencies.development}`
+    );
+
+    console.log(
+      `Manager    : ${report.dependencies.packageManager}`
+    );
+  }
+
+  console.log(divider);
+
+  console.log("LANGUAGE / FILE DISTRIBUTION");
+
+  const languages = Object.entries(
+    report.metrics.languages
+  ).sort((a, b) => b[1] - a[1]);
+
+  for (const [extension, count] of languages) {
+    console.log(
+      `  ${extension.padEnd(14)} ${count}`
+    );
+  }
+
+  console.log(divider);
+
+  console.log("LARGEST FILES");
+
+  for (const file of report.metrics.largestFiles) {
+    console.log(
+      `  ${formatBytes(file.sizeBytes).padEnd(12)} ${file.path}`
+    );
+  }
+
+  console.log(divider);
+
+  console.log("RISK FLAGS");
+
+  if (report.metrics.riskFlags.length === 0) {
+    console.log("  No obvious structural risks detected.");
+  } else {
+    for (const flag of report.metrics.riskFlags) {
+      console.log(`  ⚠ ${flag}`);
+    }
+  }
+
+  console.log(divider);
+
+  console.log(
+    `Generated  : ${report.generatedAt}`
+  );
+
+  console.log("\n");
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+
+  const units = [
+    "B",
+    "KB",
+    "MB",
+    "GB"
+  ];
+
+  const index = Math.floor(
+    Math.log(bytes) / Math.log(1024)
+  );
+
+  return `${(
+    bytes /
+    Math.pow(1024, index)
+  ).toFixed(2)} ${units[index]}`;
+}
+
+
+// ============================================================
+// src/commands/analyze.ts
+// ============================================================
+
+import {
+  scan
+} from "../core/scanner.js";
+
+import {
+  renderReport
+} from "../core/reporter.js";
+
+export async function analyzeCommand(
+  target: string
+): Promise<void> {
+  try {
+    const report = await scan(target);
+
+    renderReport(report);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Unknown error";
+
+    console.error(
+      `Failed to analyze repository: ${message}`
+    );
+
+    process.exitCode = 1;
+  }
+}
+
+
+// ============================================================
+// src/index.ts
+// ============================================================
+
+export {
+  scan
+} from "./core/scanner.js";
+
+export {
+  analyzeRepository
+} from "./analyzer/repository.js";
+
+export type {
+  RepositoryReport,
+  RepositoryStats,
+  GitStats,
+  DependencyStats,
+  ProjectMetrics
+} from "./core/types.js";
+
+
+// ============================================================
+// src/cli.ts
+// ============================================================
+
+#!/usr/bin/env node
+
+import {
+  Command
+} from "commander";
+
+import {
+  analyzeCommand
+} from "./commands/analyze.js";
+
+const program = new Command();
+
+program
+  .name("vanta")
+  .description(
+    "Repository intelligence CLI"
+  )
+  .version("1.0.0");
+
+program
+  .command("analyze")
+  .description(
+    "Analyze a local Git repository"
+  )
+  .argument(
+    "[path]",
+    "Repository path",
+    "."
+  )
+  .action(analyzeCommand);
+
+program
+  .command("scan")
+  .description(
+    "Alias for analyze"
+  )
+  .argument(
+    "[path]",
+    "Repository path",
+    "."
+  )
+  .action(analyzeCommand);
+
+program.parseAsync(process.argv);
+
+
+// ============================================================
+// tests/scanner.test.ts
+// ============================================================
+
+import {
+  describe,
+  expect,
+  it
+} from "vitest";
+
+import {
+  scan
+} from "../src/core/scanner.js";
+
+describe("repository scanner", () => {
+  it("should analyze the current repository", async () => {
+    const report = await scan(".");
+
+    expect(report.repository).toBeDefined();
+    expect(report.repository.files).toBeGreaterThanOrEqual(0);
+    expect(report.metrics).toBeDefined();
+  });
+});
+
+
+// ============================================================
+// README.md
+// ============================================================
+
+# Vanta
+
+Vanta is a lightweight repository intelligence CLI built with
+TypeScript and Node.js.
+
+It analyzes a codebase and produces a structured overview of:
+
+- Repository structure
+- File count
+- Directory count
+- Estimated lines of code
+- Repository size
+- Git branch
+- Commit count
+- Contributor count
+- Working tree state
+- Git remote
+- Runtime dependencies
+- Development dependencies
+- File and language distribution
+- Largest files
+- Basic repository risk flags
+
+## Why Vanta?
+
+Large repositories often become difficult to understand before they
+become difficult to code.
+
+Vanta provides a fast first-pass analysis without uploading the
+repository anywhere.
+
+The analysis happens locally.
+
+## Requirements
+
+- Node.js 20+
+- npm
+- Git
+
+## Installation
+
+Clone the repository:
+
+```bash
+git clone https://github.com/YOUR_USERNAME/vanta.git
+cd vanta
